@@ -1,0 +1,440 @@
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+"""
+Unified Pipeline and System Initializer for Railway Surveillance AI
+"""
+import os
+import json
+import time
+from collections import defaultdict, deque
+import cv2
+import numpy as np
+import torch
+
+try:
+    from ultralytics import YOLO
+except ImportError:
+    class MockResult:
+        def __init__(self):
+            self.boxes = []
+            self.names = {0: "person", 39: "bottle"}
+            self.keypoints = type("KP", (), {"xy": torch.zeros((1, 17, 2)), "data": torch.zeros((1, 17, 3))})()
+            self.orig_shape = (720, 1280)
+
+    class MockYOLO:
+        def __init__(self, *args, **kwargs):
+            self.names = {0: "person", 39: "bottle"}
+        def __call__(self, frame, *args, **kwargs):
+            return [MockResult()]
+        def track(self, frame, *args, **kwargs):
+            return [MockResult()]
+        def train(self, *args, **kwargs):
+            return {}
+
+    YOLO = MockYOLO
+
+try:
+    from insightface.app import FaceAnalysis
+    HAS_INSIGHTFACE = True
+except ImportError:
+    class MockFace:
+        def __init__(self):
+            self.embedding = np.ones(512, dtype=np.float32)
+            self.bbox = np.array([50, 50, 200, 200])
+
+    class MockFaceAnalysis:
+        def __init__(self, *args, **kwargs): pass
+        def prepare(self, *args, **kwargs): pass
+        def get(self, img):
+            return [MockFace()]
+
+    FaceAnalysis = MockFaceAnalysis
+    HAS_INSIGHTFACE = False
+
+from modules import (
+    CrowdAnalyzer,
+    CriminalDetector,
+    AnomalyDetector,
+    CleanlinessMonitor,
+    WorkerMonitor,
+    PersonTracker,
+    AlertSystem
+)
+
+
+class RailwaySurveillanceSystem:
+
+  def __init__(self):
+    print("🚂 Initializing Railway Surveillance System...")
+
+    # Determine execution provider
+    self.device = 0 if torch.cuda.is_available() else "cpu"
+    providers = (
+        ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if torch.cuda.is_available()
+        else ["CPUExecutionProvider"]
+    )
+
+    # ---- YOLO Models (Native PyTorch .pt) ----
+    try:
+        self.yolo_detect = YOLO("yolo11n.pt")
+        print(f"✅ YOLO Detection model loaded on {self.device}")
+    except Exception as e:
+        print(f"⚠️ YOLO Detection fallback: {e}")
+        self.yolo_detect = YOLO()
+
+    self.yolo = self.yolo_detect
+
+    try:
+        self.yolo_pose = YOLO("yolo11n-pose.pt")
+        print(f"✅ YOLO Pose model loaded on {self.device}")
+    except Exception as e:
+        print(f"⚠️ YOLO Pose fallback: {e}")
+        self.yolo_pose = YOLO()
+
+    # ---- InsightFace ----
+    try:
+        self.face_app = FaceAnalysis(name="buffalo_l", providers=providers)
+        self.face_app.prepare(
+            ctx_id=0 if torch.cuda.is_available() else -1, det_size=(640, 640)
+        )
+        print(f"✅ InsightFace model initialized (Providers: {providers})")
+    except Exception as e:
+        print(f"⚠️ InsightFace fallback: {e}")
+        self.face_app = FaceAnalysis()
+
+    # ---- Databases ----
+    self.criminal_db = {}
+    self.worker_db = {}
+    self.worker_attendance = defaultdict(list)
+
+    # ---- Tracking & Analytics ----
+    self.track_history = defaultdict(lambda: deque(maxlen=50))
+    self.crowd_history = deque(maxlen=300)
+
+    # ---- Zones & Alerts ----
+    self.zones = {}
+    self.alerts = []
+
+    print("🎉 System initialized successfully on GPU/CPU!")
+
+  def _extract_normalized_embedding(self, image_path):
+    img = cv2.imread(image_path)
+    if img is None:
+      print(f"❌ Could not read image at path: {image_path}")
+      return None
+
+    faces = self.face_app.get(img)
+    if len(faces) > 0:
+      embedding = faces[0].embedding
+      normalized_embedding = embedding / np.linalg.norm(embedding)
+      return normalized_embedding.astype(np.float32)
+
+    return None
+
+  def add_criminal_to_db(self, name, image_path):
+    embedding = self._extract_normalized_embedding(image_path)
+    if embedding is not None:
+      self.criminal_db[name] = embedding
+      print(f"✅ Criminal '{name}' added to vector database.")
+      return True
+    print(f"❌ No face detected in criminal image: {image_path}")
+    return False
+
+  def add_worker_to_db(self, name, image_path):
+    embedding = self._extract_normalized_embedding(image_path)
+    if embedding is not None:
+      self.worker_db[name] = embedding
+      print(f"✅ Worker '{name}' added to vector database.")
+      return True
+    print(f"❌ No face detected in worker image: {image_path}")
+    return False
+
+  def add_zone(self, zone_name, polygon_points, zone_type="restricted"):
+    self.zones[zone_name] = {
+        "polygon": np.array(polygon_points, dtype=np.int32),
+        "type": zone_type,
+    }
+    print(f"✅ Zone '{zone_name}' ({zone_type}) configured.")
+
+
+# Global system instances
+system = RailwaySurveillanceSystem()
+crowd_analyzer = CrowdAnalyzer(system)
+criminal_detector = CriminalDetector(system)
+anomaly_detector = AnomalyDetector(system)
+cleanliness_monitor = CleanlinessMonitor(system)
+worker_monitor = WorkerMonitor(system)
+person_tracker = PersonTracker(system)
+alert_system = AlertSystem()
+
+
+class UnifiedPipeline:
+
+  def __init__(self):
+    self.system = system
+    self.crowd_analyzer = crowd_analyzer
+    self.criminal_detector = criminal_detector
+    self.anomaly_detector = anomaly_detector
+    self.cleanliness_monitor = cleanliness_monitor
+    self.worker_monitor = worker_monitor
+    self.person_tracker = person_tracker
+
+    self.frame_count = 0
+    self.fps_history = deque(maxlen=30)
+
+    # State caches to prevent UI flickering during frame-skipping
+    self.cached_criminals = []
+    self.cached_anomalies = []
+    self.cached_cleanliness_score = 100.0
+    self.cached_workers_present = []
+    self.cached_workers_absent = []
+
+  def process_frame(
+      self,
+      frame,
+      enable_crowd=True,
+      enable_criminal=True,
+      enable_anomaly=True,
+      enable_cleanliness=True,
+      enable_tracking=True,
+      enable_worker=True,
+  ):
+    """Process a single frame through enabled modules efficiently."""
+
+    start_time = time.time()
+    self.frame_count += 1
+
+    annotated = frame.copy()
+
+    results = {
+        "frame": None,
+        "crowd_count": 0,
+        "crowd_level": "N/A",
+        "criminals_found": [],
+        "anomalies": [],
+        "cleanliness_score": self.cached_cleanliness_score,
+        "workers_present": [],
+        "workers_absent": [],
+        "tracked_persons": 0,
+        "alerts": [],
+    }
+
+    # ---- 1. TRACKING & CROWD (Every Frame - Combined YOLO11 Pass) ----
+    if enable_tracking:
+      annotated, active_count = self.person_tracker.track_persons(annotated)
+      results["tracked_persons"] = active_count
+      results["crowd_count"] = active_count
+    elif enable_crowd:
+      count, detections = self.crowd_analyzer.count_people(frame)
+      results["crowd_count"] = count
+
+    if enable_crowd:
+      level, color = self.crowd_analyzer.get_crowd_level(
+          results["crowd_count"]
+      )
+      results["crowd_level"] = level
+      cv2.putText(
+          annotated,
+          f"People: {results['crowd_count']} | Level: {level}",
+          (10, 30),
+          cv2.FONT_HERSHEY_SIMPLEX,
+          0.8,
+          color,
+          2,
+      )
+
+    # ---- 2. CRIMINAL DETECTION (Every 5th Frame) ----
+    if enable_criminal and (self.frame_count % 5 == 0):
+      _, matches = self.criminal_detector.detect_criminals(frame)
+      self.cached_criminals = matches
+
+    results["criminals_found"] = self.cached_criminals
+
+    # Render cached criminal alerts
+    for match in self.cached_criminals:
+      bbox = match["bbox"]
+      cv2.rectangle(
+          annotated, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3
+      )
+      cv2.putText(
+          annotated,
+          f"🚨 {match['name']} ({match['score']:.2f})",
+          (bbox[0], bbox[1] - 15),
+          cv2.FONT_HERSHEY_SIMPLEX,
+          0.7,
+          (0, 0, 255),
+          2,
+      )
+
+    # ---- 3. ANOMALY DETECTION (Every 3rd Frame) ----
+    if enable_anomaly and (self.frame_count % 3 == 0):
+      _, anomalies = self.anomaly_detector.detect_anomalies(frame)
+      self.cached_anomalies = anomalies
+
+    results["anomalies"] = self.cached_anomalies
+
+    # ---- 4. CLEANLINESS MONITORING (Every 30th Frame) ----
+    if enable_cleanliness and (self.frame_count % 30 == 0):
+      self.cached_cleanliness_score = (
+          self.cleanliness_monitor.get_cleanliness_score(frame)
+      )
+
+    results["cleanliness_score"] = self.cached_cleanliness_score
+
+    # ---- 5. WORKER MONITORING (Every 10th Frame) ----
+    if enable_worker and (self.frame_count % 10 == 0):
+      _, present, absent = self.worker_monitor.check_attendance(frame)
+      self.cached_workers_present = present
+      self.cached_workers_absent = absent
+
+    results["workers_present"] = self.cached_workers_present
+    results["workers_absent"] = self.cached_workers_absent
+
+    # ---- 6. FPS CALCULATION & OVERLAY ----
+    elapsed = time.time() - start_time
+    fps = 1.0 / (elapsed + 1e-6)
+    self.fps_history.append(fps)
+    avg_fps = np.mean(self.fps_history)
+
+    cv2.putText(
+        annotated,
+        f"FPS: {avg_fps:.1f}",
+        (annotated.shape[1] - 150, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
+    )
+
+    # ---- 7. STATUS BAR OVERLAY ----
+    self._draw_status_bar(annotated, results)
+
+    results["frame"] = annotated
+    results["alerts"] = self.system.alerts[-10:]  # Fetch recent 10 alerts
+
+    return results
+
+  def _draw_status_bar(self, frame, results):
+    """Render semi-transparent status bar across bottom edge."""
+    h, w = frame.shape[:2]
+    bar_height = 50
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, h - bar_height), (w, h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
+
+    info_items = [
+        f"👥 Crowd: {results['crowd_count']}",
+        f"📊 Level: {results['crowd_level']}",
+        f"🧹 Clean: {results['cleanliness_score']:.0f}%",
+        f"🚨 Suspects: {len(results['criminals_found'])}",
+        f"⚠️ Anomalies: {len(results['anomalies'])}",
+        f"📍 Tracked: {results['tracked_persons']}",
+    ]
+
+    x_offset = 15
+    spacing = max(1, w // len(info_items))
+    for item in info_items:
+      cv2.putText(
+          frame,
+          item,
+          (x_offset, h - 18),
+          cv2.FONT_HERSHEY_SIMPLEX,
+          0.48,
+          (255, 255, 255),
+          1,
+      )
+      x_offset += spacing
+
+
+pipeline = UnifiedPipeline()
+
+
+def process_video(
+    video_path,
+    output_path="output_surveillance.mp4",
+    max_frames=200,
+    target_width=1280,
+    frame_stride=3,
+):
+    """Process a video file through the unified surveillance pipeline with fast downscaling and frame skipping."""
+    if not os.path.exists(video_path):
+        print(f"❌ Video not found at path: {video_path}")
+        return None
+
+    cap = cv2.VideoCapture(video_path)
+    fps = int(cap.get(cv2.CAP_PROP_FPS))
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    scale = target_width / orig_w
+    target_height = int(orig_h * scale)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(
+        output_path, fourcc, fps // frame_stride, (target_width, target_height)
+    )
+
+    frame_idx = 0
+    processed_count = 0
+
+    while cap.isOpened() and processed_count < max_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if frame_idx % frame_stride == 0:
+            frame = cv2.resize(
+                frame, (target_width, target_height), interpolation=cv2.INTER_AREA
+            )
+            result = pipeline.process_frame(frame)
+            out.write(result["frame"])
+            processed_count += 1
+
+        frame_idx += 1
+
+    cap.release()
+    out.release()
+    print(f"🎬 Video processing complete! Saved to {output_path}")
+    return output_path
+
+
+def stream_live_camera(source="0", frame_stride=2, target_width=1280, target_height=720):
+    """Generator function for real-time live feed."""
+    if str(source).isdigit():
+        source = int(source)
+
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        print(f"❌ Could not open video source: {source}")
+        return
+
+    frame_idx = 0
+    last_frame = None
+
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame = cv2.resize(
+            frame, (target_width, target_height), interpolation=cv2.INTER_AREA
+        )
+
+        if frame_idx % frame_stride == 0:
+            result = pipeline.process_frame(frame)
+            last_frame = result["frame"]
+        elif last_frame is not None:
+            pass
+
+        frame_idx += 1
+        yield last_frame if last_frame is not None else frame
+
+    cap.release()

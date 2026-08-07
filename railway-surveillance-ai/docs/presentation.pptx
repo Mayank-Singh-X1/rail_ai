@@ -1,0 +1,11 @@
+# Presentation Summary
+
+## Title: AI-Powered Railway Surveillance & Analytics
+- **Objective**: Enhance platform safety, detect anomalies, streamline worker management, and monitor cleanliness automatically.
+- **Key Modules**:
+  1. Crowd Density & Flow Analysis
+  2. Criminal / Blacklist Person Identification
+  3. Real-time Anomaly & Fall Detection
+  4. Automatic Cleanliness Scoring
+  5. Worker Attendance & Zone Tracking
+  6. Live Dashboard & Multi-channel Alerts
