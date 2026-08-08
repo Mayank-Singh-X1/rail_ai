@@ -307,50 +307,22 @@ class UnifiedPipeline:
         f"FPS: {avg_fps:.1f}",
         (annotated.shape[1] - 150, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (255, 255, 255),
-        2,
-    )
+    # ---- 6. OVERLAYS & HUD RENDERING ----
+    from utils.visualization import draw_hud, draw_zones
+    if hasattr(self.system, 'zones') and self.system.zones:
+        draw_zones(annotated, self.system.zones)
 
-    # ---- 7. STATUS BAR OVERLAY ----
-    self._draw_status_bar(annotated, results)
+    draw_hud(annotated, results)
 
     results["frame"] = annotated
-    results["alerts"] = self.system.alerts[-10:]  # Fetch recent 10 alerts
+    results["alerts"] = self.system.alerts[-10:]
 
     return results
 
   def _draw_status_bar(self, frame, results):
-    """Render semi-transparent status bar across bottom edge."""
-    h, w = frame.shape[:2]
-    bar_height = 50
-
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (0, h - bar_height), (w, h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.65, frame, 0.35, 0, frame)
-
-    info_items = [
-        f"👥 Crowd: {results['crowd_count']}",
-        f"📊 Level: {results['crowd_level']}",
-        f"🧹 Clean: {results['cleanliness_score']:.0f}%",
-        f"🚨 Suspects: {len(results['criminals_found'])}",
-        f"⚠️ Anomalies: {len(results['anomalies'])}",
-        f"📍 Tracked: {results['tracked_persons']}",
-    ]
-
-    x_offset = 15
-    spacing = max(1, w // len(info_items))
-    for item in info_items:
-      cv2.putText(
-          frame,
-          item,
-          (x_offset, h - 18),
-          cv2.FONT_HERSHEY_SIMPLEX,
-          0.48,
-          (255, 255, 255),
-          1,
-      )
-      x_offset += spacing
+    """Fallback alias for HUD drawing."""
+    from utils.visualization import draw_hud
+    draw_hud(frame, results)
 
 
 pipeline = UnifiedPipeline()
