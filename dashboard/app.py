@@ -7,8 +7,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 """
 Interactive Gradio Dashboard for Indian Railways AI Surveillance System
-Supports Browser WebRTC Streaming, Video File Uploads, Face Registration (Criminals & Staff),
-and Real-time Railway Analytics.
+Optimized for high-speed continuous streaming, multi-camera uploads, and face databases.
 """
 import os
 import tempfile
@@ -33,21 +32,36 @@ from utils.analytics import AnalyticsDashboard
 def create_dashboard():
     
     # -------------------------------------------------------------
-    # Helper 1: Real-time Live Webcam Stream Processing
+    # Helper 1: Real-time Live Webcam Stream Processing (Continuous & Non-blocking)
     # -------------------------------------------------------------
-    def process_webcam_frame(webcam_frame, enable_crowd, enable_criminal, enable_anomaly, enable_cleanliness):
-        """Processes real-time webcam frame from browser in Colab/Local."""
+    def process_webcam_frame(webcam_frame, enable_crowd=True, enable_criminal=True, enable_anomaly=True, enable_cleanliness=True):
+        """Processes real-time webcam frame from browser in Colab/Local continuously without freeze."""
         if webcam_frame is None:
             return None
-        frame = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
-        results = pipeline.process_frame(
-            frame,
-            enable_crowd=enable_crowd,
-            enable_criminal=enable_criminal,
-            enable_anomaly=enable_anomaly,
-            enable_cleanliness=enable_cleanliness
-        )
-        return cv2.cvtColor(results['frame'], cv2.COLOR_BGR2RGB)
+        
+        # Handle dict or raw numpy array from Gradio
+        if isinstance(webcam_frame, dict):
+            webcam_frame = webcam_frame.get('image', webcam_frame.get('composite', None))
+        
+        if webcam_frame is None:
+            return None
+            
+        try:
+            arr = np.array(webcam_frame, dtype=np.uint8)
+            if len(arr.shape) == 3 and arr.shape[2] == 4:
+                arr = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)
+            
+            frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            results = pipeline.process_frame(
+                frame,
+                enable_crowd=bool(enable_crowd),
+                enable_criminal=bool(enable_criminal),
+                enable_anomaly=bool(enable_anomaly),
+                enable_cleanliness=bool(enable_cleanliness)
+            )
+            return cv2.cvtColor(results['frame'], cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            return webcam_frame
 
     # -------------------------------------------------------------
     # Helper 2: Video File Processing
@@ -57,7 +71,7 @@ def create_dashboard():
             return None, "❌ Please upload a video file (.mp4, .avi, .mov)."
         
         progress(0.1, desc="Loading video file...")
-        input_path = video_file if isinstance(video_file, str) else video_file.name
+        input_path = video_file if isinstance(video_file, str) else getattr(video_file, "name", str(video_file))
         output_path = os.path.join(tempfile.gettempdir(), "annotated_surveillance_output.mp4")
         
         cap = cv2.VideoCapture(input_path)
@@ -65,15 +79,15 @@ def create_dashboard():
             return None, "❌ Error reading video file."
         
         fps = int(cap.get(cv2.CAP_PROP_FPS)) or 25
-        orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+        orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 100
         
         target_w = 1280
-        target_h = int(orig_h * (target_w / orig_w))
+        target_h = int(orig_h * (target_w / orig_w)) if orig_w else 720
         
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(output_path, fourcc, max(1, fps // frame_stride), (target_w, target_h))
+        out = cv2.VideoWriter(output_path, fourcc, max(1, fps // int(frame_stride)), (target_w, target_h))
         
         frame_idx = 0
         processed_count = 0
@@ -87,7 +101,7 @@ def create_dashboard():
             if not ret:
                 break
             
-            if frame_idx % frame_stride == 0:
+            if frame_idx % int(frame_stride) == 0:
                 frame_resized = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
                 res = pipeline.process_frame(frame_resized)
                 out.write(res["frame"])
@@ -227,7 +241,7 @@ def create_dashboard():
         with gr.Tabs():
             
             # =========================================================
-            # TAB 1: LIVE BROWSER WEBCAM (COLAB & LOCAL COMPATIBLE)
+            # TAB 1: LIVE BROWSER WEBCAM (CONTINUOUS STREAMING)
             # =========================================================
             with gr.Tab("📹 Live Browser Webcam (Real-Time AI)"):
                 gr.Markdown("### ⚡ Stream directly from your Laptop/Mobile Webcam to the GPU in real-time")
@@ -235,7 +249,8 @@ def create_dashboard():
                     with gr.Column(scale=1):
                         webcam_input = gr.Image(
                             sources=["webcam"], 
-                            streaming=True, 
+                            streaming=True,
+                            stream_every=0.08,
                             label="📷 Live Client Webcam Feed"
                         )
                         with gr.Accordion("⚙️ Active Module Filters", open=True):
@@ -249,11 +264,13 @@ def create_dashboard():
                             label="🎯 Annotated AI Output with Tracking & Safety HUD"
                         )
                 
-                # Real-time frame streaming
+                # Real-time continuous non-blocking frame stream
                 webcam_input.stream(
                     fn=process_webcam_frame,
                     inputs=[webcam_input, live_crowd_chk, live_crim_chk, live_anom_chk, live_clean_chk],
-                    outputs=[webcam_output]
+                    outputs=[webcam_output],
+                    concurrency_limit=None,
+                    show_progress="hidden"
                 )
 
             # =========================================================
@@ -360,4 +377,5 @@ def create_dashboard():
 
 if __name__ == "__main__":
     demo = create_dashboard()
+    demo.queue(default_concurrency_limit=20)
     demo.launch(share=False)
