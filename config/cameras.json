@@ -1,0 +1,20 @@
+{
+  "cam_01": {
+    "name": "Platform 1 Main Stream",
+    "source": "0",
+    "fps": 30,
+    "resolution": [
+      1280,
+      720
+    ]
+  },
+  "cam_02": {
+    "name": "Track Crossing Camera",
+    "source": "assets/sample_feed.mp4",
+    "fps": 25,
+    "resolution": [
+      1280,
+      720
+    ]
+  }
+}
