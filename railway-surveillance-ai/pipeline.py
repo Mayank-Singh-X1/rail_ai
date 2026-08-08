@@ -296,18 +296,13 @@ class UnifiedPipeline:
     results["workers_present"] = self.cached_workers_present
     results["workers_absent"] = self.cached_workers_absent
 
-    # ---- 6. FPS CALCULATION & OVERLAY ----
+    # ---- 6. FPS CALCULATION ----
     elapsed = time.time() - start_time
     fps = 1.0 / (elapsed + 1e-6)
     self.fps_history.append(fps)
     avg_fps = np.mean(self.fps_history)
 
-    cv2.putText(
-        annotated,
-        f"FPS: {avg_fps:.1f}",
-        (annotated.shape[1] - 150, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-    # ---- 6. OVERLAYS & HUD RENDERING ----
+    # ---- 7. OVERLAYS & HUD RENDERING ----
     from utils.visualization import draw_hud, draw_zones
     if hasattr(self.system, 'zones') and self.system.zones:
         draw_zones(annotated, self.system.zones)
@@ -323,6 +318,7 @@ class UnifiedPipeline:
     """Fallback alias for HUD drawing."""
     from utils.visualization import draw_hud
     draw_hud(frame, results)
+
 
 
 pipeline = UnifiedPipeline()
