@@ -7,9 +7,10 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 """
 Interactive Gradio Dashboard for Indian Railways AI Surveillance System
-Features high-frequency continuous timer-driven live streaming, video processing, and face vector DB.
+Optimized with visual button feedback, auto-refresh streaming, and full face DB management.
 """
 import os
+import time
 import tempfile
 import cv2
 import numpy as np
@@ -37,14 +38,14 @@ def create_dashboard():
     def process_webcam_frame(webcam_frame, enable_crowd=True, enable_criminal=True, enable_anomaly=True, enable_cleanliness=True):
         """Processes real-time webcam frame from browser continuously without freeze."""
         if webcam_frame is None:
-            return None
+            return None, "⚠️ Please turn on your webcam above (click 'Record' or camera icon)."
         
         # Handle dict format if returned by Gradio
         if isinstance(webcam_frame, dict):
             webcam_frame = webcam_frame.get('image', webcam_frame.get('composite', None))
         
         if webcam_frame is None:
-            return None
+            return None, "⚠️ Waiting for camera frame..."
             
         try:
             arr = np.array(webcam_frame, dtype=np.uint8)
@@ -59,9 +60,11 @@ def create_dashboard():
                 enable_anomaly=bool(enable_anomaly),
                 enable_cleanliness=bool(enable_cleanliness)
             )
-            return cv2.cvtColor(results['frame'], cv2.COLOR_BGR2RGB)
+            out_rgb = cv2.cvtColor(results['frame'], cv2.COLOR_BGR2RGB)
+            status_str = f"🟢 AI Active | Crowd: {results['crowd_count']} | Clean: {results['cleanliness_score']:.0f}% | Suspects: {len(results['criminals_found'])} | Anomalies: {len(results['anomalies'])} | Time: {time.strftime('%H:%M:%S')}"
+            return out_rgb, status_str
         except Exception as e:
-            return webcam_frame
+            return webcam_frame, f"⚠️ Stream status: {e}"
 
     # -------------------------------------------------------------
     # Helper 2: Video File Processing
@@ -243,6 +246,7 @@ def create_dashboard():
             # =========================================================
             with gr.Tab("📹 Live Browser Webcam (Real-Time AI)"):
                 gr.Markdown("### ⚡ Stream directly from your Laptop/Mobile Webcam to the GPU in real-time")
+                
                 with gr.Row():
                     with gr.Column(scale=1):
                         webcam_input = gr.Image(
@@ -256,45 +260,38 @@ def create_dashboard():
                             live_anom_chk = gr.Checkbox(True, label="⚠️ Anomaly & Fall Detection")
                             live_clean_chk = gr.Checkbox(True, label="🧹 Cleanliness Scoring")
                         
-                        snap_btn = gr.Button("⚡ Trigger Continuous Stream / Process Frame", variant="primary")
+                        snap_btn = gr.Button("⚡ Run / Update AI Frame", variant="primary")
                     
                     with gr.Column(scale=1):
                         webcam_output = gr.Image(
                             label="🎯 Annotated AI Output with Tracking & Safety HUD"
                         )
+                        stream_status_text = gr.Markdown("🟢 Ready for live frames.")
                 
-                # Real-time continuous stream event bindings
+                # Real-time stream event bindings
                 stream_inputs = [webcam_input, live_crowd_chk, live_crim_chk, live_anom_chk, live_clean_chk]
+                stream_outputs = [webcam_output, stream_status_text]
                 
-                # 1. Stream on incoming frame
+                # Event 1: When webcam streams
                 webcam_input.stream(
                     fn=process_webcam_frame,
                     inputs=stream_inputs,
-                    outputs=[webcam_output]
+                    outputs=stream_outputs
                 )
-                # 2. Change / update trigger
+                
+                # Event 2: When webcam changes / records frame
                 webcam_input.change(
                     fn=process_webcam_frame,
                     inputs=stream_inputs,
-                    outputs=[webcam_output]
+                    outputs=stream_outputs
                 )
-                # 3. Manual snap / kick-start trigger
+                
+                # Event 3: Button Click with dynamic UI loading feedback
                 snap_btn.click(
                     fn=process_webcam_frame,
                     inputs=stream_inputs,
-                    outputs=[webcam_output]
+                    outputs=stream_outputs
                 )
-                
-                # 4. Continuous High-Speed Timer Loop (pumps frames continuously without freezing)
-                try:
-                    stream_timer = gr.Timer(value=0.1, active=True)
-                    stream_timer.tick(
-                        fn=process_webcam_frame,
-                        inputs=stream_inputs,
-                        outputs=[webcam_output]
-                    )
-                except Exception:
-                    pass
 
             # =========================================================
             # TAB 2: VIDEO FILE UPLOAD & PROCESSING
