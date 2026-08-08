@@ -239,15 +239,7 @@ class UnifiedPipeline:
           results["crowd_count"]
       )
       results["crowd_level"] = level
-      cv2.putText(
-          annotated,
-          f"People: {results['crowd_count']} | Level: {level}",
-          (10, 30),
-          cv2.FONT_HERSHEY_SIMPLEX,
-          0.8,
-          color,
-          2,
-      )
+
 
     # ---- 2. CRIMINAL DETECTION (Every 5th Frame) ----
     if enable_criminal and (self.frame_count % 5 == 0):
