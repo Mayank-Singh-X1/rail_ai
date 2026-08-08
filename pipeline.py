@@ -72,13 +72,23 @@ class RailwaySurveillanceSystem:
   def __init__(self):
     print("🚂 Initializing Railway Surveillance System...")
 
-    # Determine execution provider
-    self.device = 0 if torch.cuda.is_available() else "cpu"
+    # Determine execution provider (CUDA for NVIDIA, MPS for Apple Silicon M4, or CPU)
+    if torch.cuda.is_available():
+        self.device = 0
+        device_name = "NVIDIA CUDA GPU"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        self.device = "mps"
+        device_name = "Apple Silicon M4 GPU (Metal MPS)"
+    else:
+        self.device = "cpu"
+        device_name = "CPU"
+
     providers = (
         ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if torch.cuda.is_available()
-        else ["CPUExecutionProvider"]
+        else ["CoreMLExecutionProvider", "CPUExecutionProvider"]
     )
+
 
     # ---- YOLO Models (Native PyTorch .pt) ----
     try:
