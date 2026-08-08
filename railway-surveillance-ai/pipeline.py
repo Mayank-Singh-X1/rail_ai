@@ -406,35 +406,63 @@ def process_video(
     return output_path
 
 
-def stream_live_camera(source="0", frame_stride=2, target_width=1280, target_height=720):
-    """Generator function for real-time live feed."""
+def stream_live_camera(source="0", frame_stride=2, target_width=1280, target_height=720, max_frames=300):
+    """
+    Generator function for real-time live feed.
+    Supports local webcams, RTSP streams, video files, and Colab simulation fallback.
+    """
     if str(source).isdigit():
         source = int(source)
 
     cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        print(f"❌ Could not open video source: {source}")
-        return
+    is_valid_source = cap.isOpened()
+
+    if not is_valid_source:
+        print(f"⚠️ Physical camera not detected on cloud server ({source}). Switching to Live Railway CCTV Simulation Mode...")
 
     frame_idx = 0
     last_frame = None
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+    while frame_idx < max_frames:
+        if is_valid_source:
+            ret, frame = cap.read()
+            if not ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Loop video
+                ret, frame = cap.read()
+                if not ret:
+                    break
+        else:
+            # Generate dynamic realistic Railway CCTV stream simulation
+            frame = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+            frame[:] = (40, 45, 50) # Dark platform background
 
-        frame = cv2.resize(
-            frame, (target_width, target_height), interpolation=cv2.INTER_AREA
-        )
+            # Platform edge and yellow safety line
+            cv2.line(frame, (0, target_height - 180), (target_width, target_height - 180), (0, 215, 255), 4)
+            cv2.line(frame, (0, target_height - 100), (target_width, target_height - 100), (80, 80, 80), 3)
+            cv2.putText(frame, "PLATFORM 2 - CAUTION: STAY BEHIND YELLOW LINE", (40, target_height - 195),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 215, 255), 2)
+
+            # Simulated moving passenger targets
+            t = frame_idx * 0.08
+            num_passengers = 6 + int(3 * np.sin(t * 0.5))
+            for i in range(num_passengers):
+                px = int((target_width * 0.15 + (i * 140) + np.sin(t + i) * 60) % (target_width - 100))
+                py = int(220 + (i % 3) * 80 + np.cos(t * 0.8 + i) * 30)
+                # Draw passenger representation
+                cv2.circle(frame, (px + 25, py - 15), 18, (180, 200, 220), -1) # Head
+                cv2.rectangle(frame, (px, py), (px + 50, py + 110), (140, 150, 160), -1) # Body
+                cv2.putText(frame, "person", (px, py - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+            time.sleep(0.04) # Simulate 25 FPS stream timing
+
+        frame = cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
 
         if frame_idx % frame_stride == 0:
             result = pipeline.process_frame(frame)
             last_frame = result["frame"]
-        elif last_frame is not None:
-            pass
 
         frame_idx += 1
         yield last_frame if last_frame is not None else frame
 
-    cap.release()
+    if is_valid_source:
+        cap.release()
