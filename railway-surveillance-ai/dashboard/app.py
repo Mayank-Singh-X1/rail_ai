@@ -15,8 +15,17 @@ import cv2
 import numpy as np
 import gradio as gr
 
-from pipeline import system, pipeline, process_video, stream_live_camera
-from utils.analytics import AnalyticsDashboard
+try:
+    from pipeline import system, pipeline, process_video, stream_live_camera
+except ImportError:
+    from pipeline import RailwaySurveillanceSystem, UnifiedPipeline
+    try:
+        from pipeline import process_video, stream_live_camera
+    except ImportError:
+        pass
+    system = RailwaySurveillanceSystem()
+    pipeline = UnifiedPipeline()
+
 
 
 def create_dashboard():
