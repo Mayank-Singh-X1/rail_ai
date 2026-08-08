@@ -7,7 +7,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 """
 Interactive Gradio Dashboard for Indian Railways AI Surveillance System
-Fully compatible with Gradio 4.x, 5.x, and 6.x.
+Features high-frequency continuous timer-driven live streaming, video processing, and face vector DB.
 """
 import os
 import tempfile
@@ -35,7 +35,7 @@ def create_dashboard():
     # Helper 1: Real-time Live Webcam Stream Processing
     # -------------------------------------------------------------
     def process_webcam_frame(webcam_frame, enable_crowd=True, enable_criminal=True, enable_anomaly=True, enable_cleanliness=True):
-        """Processes real-time webcam frame from browser continuously without errors."""
+        """Processes real-time webcam frame from browser continuously without freeze."""
         if webcam_frame is None:
             return None
         
@@ -226,7 +226,7 @@ def create_dashboard():
         return md
 
     # -------------------------------------------------------------
-    # BUILD GRADIO DASHBOARD UI (Gradio 4/5/6 Universal Compatible)
+    # BUILD GRADIO DASHBOARD UI
     # -------------------------------------------------------------
     with gr.Blocks(title="Indian Railways AI Surveillance System") as demo:
         
@@ -255,18 +255,46 @@ def create_dashboard():
                             live_crim_chk = gr.Checkbox(True, label="🚨 Criminal / Suspect Recognition")
                             live_anom_chk = gr.Checkbox(True, label="⚠️ Anomaly & Fall Detection")
                             live_clean_chk = gr.Checkbox(True, label="🧹 Cleanliness Scoring")
+                        
+                        snap_btn = gr.Button("⚡ Trigger Continuous Stream / Process Frame", variant="primary")
                     
                     with gr.Column(scale=1):
                         webcam_output = gr.Image(
                             label="🎯 Annotated AI Output with Tracking & Safety HUD"
                         )
                 
-                # Real-time continuous stream
+                # Real-time continuous stream event bindings
+                stream_inputs = [webcam_input, live_crowd_chk, live_crim_chk, live_anom_chk, live_clean_chk]
+                
+                # 1. Stream on incoming frame
                 webcam_input.stream(
                     fn=process_webcam_frame,
-                    inputs=[webcam_input, live_crowd_chk, live_crim_chk, live_anom_chk, live_clean_chk],
+                    inputs=stream_inputs,
                     outputs=[webcam_output]
                 )
+                # 2. Change / update trigger
+                webcam_input.change(
+                    fn=process_webcam_frame,
+                    inputs=stream_inputs,
+                    outputs=[webcam_output]
+                )
+                # 3. Manual snap / kick-start trigger
+                snap_btn.click(
+                    fn=process_webcam_frame,
+                    inputs=stream_inputs,
+                    outputs=[webcam_output]
+                )
+                
+                # 4. Continuous High-Speed Timer Loop (pumps frames continuously without freezing)
+                try:
+                    stream_timer = gr.Timer(value=0.1, active=True)
+                    stream_timer.tick(
+                        fn=process_webcam_frame,
+                        inputs=stream_inputs,
+                        outputs=[webcam_output]
+                    )
+                except Exception:
+                    pass
 
             # =========================================================
             # TAB 2: VIDEO FILE UPLOAD & PROCESSING
