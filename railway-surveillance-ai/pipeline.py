@@ -63,7 +63,8 @@ from modules import (
     CleanlinessMonitor,
     WorkerMonitor,
     PersonTracker,
-    AlertSystem
+    AlertSystem,
+    WeaponDetector,
 )
 
 
@@ -86,7 +87,7 @@ class RailwaySurveillanceSystem:
     providers = (
         ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if torch.cuda.is_available()
-        else ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        else ["CPUExecutionProvider"]
     )
 
 
@@ -181,6 +182,7 @@ anomaly_detector = AnomalyDetector(system)
 cleanliness_monitor = CleanlinessMonitor(system)
 worker_monitor = WorkerMonitor(system)
 person_tracker = PersonTracker(system)
+weapon_detector = WeaponDetector(system)
 alert_system = AlertSystem()
 
 
@@ -198,6 +200,7 @@ class UnifiedPipeline:
     self.cleanliness_monitor = cleanliness_monitor
     self.worker_monitor = worker_monitor
     self.person_tracker = person_tracker
+    self.weapon_detector = weapon_detector
 
     self.frame_count = 0
     self.fps_history = deque(maxlen=30)
@@ -208,18 +211,21 @@ class UnifiedPipeline:
     self.cached_cleanliness_score = 94.5
     self.cached_workers_present = []
     self.cached_workers_absent = []
+    self.cached_weapons = []           # Weapon detection cache
 
     # Configurable wall-clock time intervals (in seconds)
     self.cleanliness_interval = 20.0  # Process cleanliness every 20 seconds
-    self.criminal_interval = 3.0     # Process face recognition every 3 seconds
+    self.criminal_interval = 1.0      # Criminal face scan every 1 second
     self.worker_interval = 15.0       # Process staff attendance every 15 seconds
     self.anomaly_interval = 1.0       # Process pose fall detection every 1 second
+    self.weapon_interval = 0.5        # Weapon scan every 500ms
 
     # Timestamps of last execution
     self.last_cleanliness_time = 0.0
     self.last_criminal_time = 0.0
     self.last_worker_time = 0.0
     self.last_anomaly_time = 0.0
+    self.last_weapon_time = 0.0
 
     # Thread pool for non-blocking asynchronous AI compute
     self.executor = ThreadPoolExecutor(max_workers=3)
@@ -235,10 +241,24 @@ class UnifiedPipeline:
 
   def _async_criminal_task(self, frame_copy):
     try:
-      _, matches = self.criminal_detector.detect_criminals(frame_copy)
+      # Resize to 480px wide for faster InsightFace inference on CPU
+      h, w = frame_copy.shape[:2]
+      if w > 480:
+        scale = 480 / w
+        small = cv2.resize(frame_copy, (480, int(h * scale)), interpolation=cv2.INTER_LINEAR)
+      else:
+        small = frame_copy
+      _, matches = self.criminal_detector.detect_criminals(small)
+      # Scale bboxes back to original frame resolution
+      if w > 480:
+        sx = w / 480
+        sy = h / int(h * (480 / w))
+        for m in matches:
+          b = m["bbox"]
+          m["bbox"] = [int(b[0]*sx), int(b[1]*sy), int(b[2]*sx), int(b[3]*sy)]
       with self.lock:
         self.cached_criminals = matches
-    except Exception:
+    except Exception as e:
       pass
 
   def _async_worker_task(self, frame_copy):
@@ -258,6 +278,14 @@ class UnifiedPipeline:
     except Exception:
       pass
 
+  def _async_weapon_task(self, frame_copy):
+    try:
+      _, weapons = self.weapon_detector.detect_weapons(frame_copy)
+      with self.lock:
+        self.cached_weapons = weapons
+    except Exception:
+      pass
+
   def process_frame(
       self,
       frame,
@@ -267,6 +295,7 @@ class UnifiedPipeline:
       enable_cleanliness=True,
       enable_tracking=True,
       enable_worker=True,
+      enable_weapon=True,
   ):
     """Ultra-fast non-blocking frame processor with time-gapped async AI tasks."""
     start_time = time.time()
@@ -292,10 +321,15 @@ class UnifiedPipeline:
       self.last_cleanliness_time = now
       self.executor.submit(self._async_cleanliness_task, frame.copy())
 
-    # Criminal / Face ID every 3s
+    # Criminal / Face ID — SYNC if DB has faces (guarantees result on this frame)
+    # Async otherwise so empty-DB case doesn't block anything
     if enable_criminal and (now - self.last_criminal_time >= self.criminal_interval):
       self.last_criminal_time = now
-      self.executor.submit(self._async_criminal_task, frame.copy())
+      if self.system.criminal_db:
+        # Run synchronously so the box appears on THIS frame
+        self._async_criminal_task(frame.copy())
+      else:
+        self.executor.submit(self._async_criminal_task, frame.copy())
 
     # Worker Attendance every 15s
     if enable_worker and (now - self.last_worker_time >= self.worker_interval):
@@ -307,6 +341,11 @@ class UnifiedPipeline:
       self.last_anomaly_time = now
       self.executor.submit(self._async_anomaly_task, frame.copy())
 
+    # Weapon scan every 500ms (fast 320px scan — minimal CPU cost)
+    if enable_weapon and (now - self.last_weapon_time >= self.weapon_interval):
+      self.last_weapon_time = now
+      self.executor.submit(self._async_weapon_task, frame.copy())
+
     # ---- 3. RENDER ANNOTATIONS FROM ATOMIC CACHE ----
     with self.lock:
       criminals = list(self.cached_criminals)
@@ -314,20 +353,36 @@ class UnifiedPipeline:
       clean_score = self.cached_cleanliness_score
       w_present = list(self.cached_workers_present)
       w_absent = list(self.cached_workers_absent)
+      weapons = list(self.cached_weapons)
 
-    # Draw cached criminal boxes
+    # Draw cached criminal target boxes
     for match in criminals:
       bbox = match["bbox"]
-      cv2.rectangle(annotated, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 2)
+      x1, y1, x2, y2 = bbox
+      cv2.rectangle(annotated, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 180), 1)
+      cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+      ln = min(14, max(4, (x2 - x1) // 4))
+      for px, py, dx, dy in [(x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)]:
+        cv2.line(annotated, (px, py), (px + dx * ln, py), (0, 0, 255), 3, cv2.LINE_AA)
+        cv2.line(annotated, (px, py), (px, py + dy * ln), (0, 0, 255), 3, cv2.LINE_AA)
+
+      label = f"⚠️ WANTED: {match['name']} ({match.get('score', 0.0):.2f})"
+      (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+      by = max(y1 - 4, lh + 8)
+      cv2.rectangle(annotated, (x1, by - lh - 6), (x1 + lw + 8, by + 2), (0, 0, 200), -1)
+      cv2.putText(annotated, label, (x1 + 4, by - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # Draw weapon boxes (overlaid from cache — no extra YOLO cost this frame)
+    for w_item in weapons:
+      x1, y1, x2, y2 = w_item["bbox"]
+      label = w_item.get("label", "Weapon")
+      conf = w_item.get("confidence", 0.0)
+      col = (0, 0, 255) if label.lower() in ("gun", "pistol", "rifle") else (0, 80, 255)
+      cv2.rectangle(annotated, (x1, y1), (x2, y2), col, 2, cv2.LINE_AA)
       cv2.putText(
-          annotated,
-          f"ALERT: {match['name']}",
-          (bbox[0], max(20, bbox[1] - 8)),
-          cv2.FONT_HERSHEY_SIMPLEX,
-          0.5,
-          (0, 0, 255),
-          1,
-          cv2.LINE_AA,
+          annotated, f"WEAPON:{label} {conf:.0%}",
+          (x1, max(14, y1 - 6)),
+          cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1, cv2.LINE_AA,
       )
 
     # ---- 4. FPS CALCULATION ----
@@ -345,6 +400,7 @@ class UnifiedPipeline:
         "workers_present": w_present,
         "workers_absent": w_absent,
         "tracked_persons": active_count,
+        "weapons_found": weapons,
         "alerts": self.system.alerts[-10:],
     }
 

@@ -1,0 +1,8 @@
+{
+  "cam_01": {
+    "name": "Platform 1 Main Stream",
+    "source": "0",
+    "fps": 30,
+    "resolution": [1280, 720]
+  }
+}

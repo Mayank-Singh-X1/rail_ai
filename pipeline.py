@@ -86,7 +86,7 @@ class RailwaySurveillanceSystem:
     providers = (
         ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if torch.cuda.is_available()
-        else ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        else ["CPUExecutionProvider"]
     )
 
 
@@ -211,7 +211,7 @@ class UnifiedPipeline:
 
     # Configurable wall-clock time intervals (in seconds)
     self.cleanliness_interval = 20.0  # Process cleanliness every 20 seconds
-    self.criminal_interval = 3.0     # Process face recognition every 3 seconds
+    self.criminal_interval = 1.0     # Process face recognition every 1 second
     self.worker_interval = 15.0       # Process staff attendance every 15 seconds
     self.anomaly_interval = 1.0       # Process pose fall detection every 1 second
 
@@ -292,10 +292,13 @@ class UnifiedPipeline:
       self.last_cleanliness_time = now
       self.executor.submit(self._async_cleanliness_task, frame.copy())
 
-    # Criminal / Face ID every 3s
+    # Criminal / Face ID — SYNC if DB has faces to guarantee zero latency box rendering
     if enable_criminal and (now - self.last_criminal_time >= self.criminal_interval):
       self.last_criminal_time = now
-      self.executor.submit(self._async_criminal_task, frame.copy())
+      if self.system.criminal_db:
+        self._async_criminal_task(frame.copy())
+      else:
+        self.executor.submit(self._async_criminal_task, frame.copy())
 
     # Worker Attendance every 15s
     if enable_worker and (now - self.last_worker_time >= self.worker_interval):
@@ -315,20 +318,22 @@ class UnifiedPipeline:
       w_present = list(self.cached_workers_present)
       w_absent = list(self.cached_workers_absent)
 
-    # Draw cached criminal boxes
+    # Draw cached criminal target boxes
     for match in criminals:
       bbox = match["bbox"]
-      cv2.rectangle(annotated, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 2)
-      cv2.putText(
-          annotated,
-          f"ALERT: {match['name']}",
-          (bbox[0], max(20, bbox[1] - 8)),
-          cv2.FONT_HERSHEY_SIMPLEX,
-          0.5,
-          (0, 0, 255),
-          1,
-          cv2.LINE_AA,
-      )
+      x1, y1, x2, y2 = bbox
+      cv2.rectangle(annotated, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 180), 1)
+      cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+      ln = min(14, max(4, (x2 - x1) // 4))
+      for px, py, dx, dy in [(x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)]:
+        cv2.line(annotated, (px, py), (px + dx * ln, py), (0, 0, 255), 3, cv2.LINE_AA)
+        cv2.line(annotated, (px, py), (px, py + dy * ln), (0, 0, 255), 3, cv2.LINE_AA)
+
+      label = f"⚠️ WANTED: {match['name']} ({match.get('score', 0.0):.2f})"
+      (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+      by = max(y1 - 4, lh + 8)
+      cv2.rectangle(annotated, (x1, by - lh - 6), (x1 + lw + 8, by + 2), (0, 0, 200), -1)
+      cv2.putText(annotated, label, (x1 + 4, by - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
     # ---- 4. FPS CALCULATION ----
     elapsed = time.time() - start_time

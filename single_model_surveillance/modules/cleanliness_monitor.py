@@ -10,6 +10,7 @@ except ImportError:
     YOLO = None
 
 
+# Expanded COCO classes for platform litter, food waste, containers & clutter
 LITTER_CLASSES = {
     39: "bottle",
     40: "wine glass",
@@ -59,6 +60,7 @@ class CleanlinessMonitor:
     detections = []
     annotated_frame = frame.copy()
 
+    # Route inference through fine-tuned model or system detector (low threshold 0.15 for floor litter)
     if self.custom_model:
       results = self.custom_model(
           frame, conf=0.15, verbose=False, device=self.system.device
@@ -87,6 +89,7 @@ class CleanlinessMonitor:
               {"type": label, "bbox": (x1, y1, x2, y2), "confidence": conf}
           )
 
+          # Draw ORANGE bounding box with litter badge
           cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 140, 255), 2)
           badge = f"🗑️ {label.upper()} ({conf:.0%})"
           (bw, bh), _ = cv2.getTextSize(badge, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
@@ -103,13 +106,16 @@ class CleanlinessMonitor:
               cv2.LINE_AA,
           )
 
+    # ---- SURFACE CLUTTER & STAIN VARIANCE ANALYZER ----
     h, w = frame.shape[:2]
     floor_roi = frame[int(h * 0.55):, :]
     if floor_roi.size > 0:
       gray_floor = cv2.cvtColor(floor_roi, cv2.COLOR_BGR2GRAY)
       std_dev = float(np.std(gray_floor))
 
+      # If floor clutter std_dev > 48, detect clutter regions
       if std_dev > 48 and len(detections) == 0:
+        # High texture variance on platform floor indicates scattered litter/stains
         cx1, cy1 = int(w * 0.3), int(h * 0.65)
         cx2, cy2 = int(w * 0.7), int(h * 0.88)
         detections.append({"type": "floor clutter / debris", "bbox": (cx1, cy1, cx2, cy2), "confidence": 0.65})

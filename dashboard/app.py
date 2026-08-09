@@ -61,7 +61,11 @@ def create_dashboard():
                 enable_cleanliness=bool(enable_cleanliness)
             )
             out_rgb = cv2.cvtColor(results['frame'], cv2.COLOR_BGR2RGB)
-            status_str = f"🟢 AI Active | Crowd: {results['crowd_count']} | Clean: {results['cleanliness_score']:.0f}% | Suspects: {len(results['criminals_found'])} | Anomalies: {len(results['anomalies'])} | Time: {time.strftime('%H:%M:%S')}"
+            if len(results['criminals_found']) > 0:
+                names = ", ".join([m['name'] for m in results['criminals_found']])
+                status_str = f"🚨 **CRITICAL SECURITY ALERT: WANTED SUSPECT IDENTIFIED [{names.upper()}]! RPF NOTIFIED.** | Time: {time.strftime('%H:%M:%S')}"
+            else:
+                status_str = f"🟢 AI Active | Crowd: {results['crowd_count']} | Clean: {results['cleanliness_score']:.0f}% | Suspects: 0 | Anomalies: {len(results['anomalies'])} | Time: {time.strftime('%H:%M:%S')}"
             return out_rgb, status_str
         except Exception as e:
             return webcam_frame, f"⚠️ Stream status: {e}"
@@ -169,11 +173,16 @@ def create_dashboard():
 | ⚠️ **Pose Anomalies** | **{len(results['anomalies'])}** | {'⚠️ Fall/Fight Detected' if results['anomalies'] else '✅ Normal'} |
 | 📍 **Tracked Objects** | **{results['tracked_persons']}** | ByteTrack Active |
 """
-        alerts_text = "### 🔔 Active Security Alerts\n\n"
+        if results['criminals_found']:
+            suspect_names = ", ".join([m['name'] for m in results['criminals_found']])
+            alerts_text = f"### 🚨 CRITICAL SECURITY ALERT: WANTED SUSPECT IDENTIFIED!\n\n> **⚠️ WANTED SUSPECT(S) DETECTED:** `{suspect_names.upper()}`\n> **Action Status:** 🚨 High Priority Alert Dispatched to RPF Control Room & On-Duty Officers.\n\n"
+        else:
+            alerts_text = "### 🔔 Active Security Alerts\n\n"
+
         if results['alerts']:
             for alert in results['alerts'][-5:]:
-                alerts_text += f"- **{alert.get('type', 'Alert')}** ({alert.get('severity', 'LOW')}) at {alert.get('timestamp', 'N/A')}\n"
-        else:
+                alerts_text += f"- **{alert.get('type', 'Alert')}**: {alert.get('name', '')} (Confidence: {alert.get('confidence', 'N/A')}) at {alert.get('timestamp', 'N/A')}\n"
+        elif not results['criminals_found']:
             alerts_text += "✅ No active safety alerts for this frame.\n"
             
         return output_frame, analytics, alerts_text

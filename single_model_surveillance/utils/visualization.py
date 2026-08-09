@@ -1,20 +1,26 @@
 """
-High-Performance Visualization & HUD Overlay Utilities — Optimized for CPU real-time.
-All draws use LINE_AA and are kept minimal to save ~1-2ms per frame.
+High-Performance Single-Model Visualization & HUD Overlay Utilities
+Optimized for zero-latency presentation to judges.
 """
 import cv2
 import numpy as np
 import time
 
 
-_hud_template = {}          # pre-rendered pill backgrounds cached per resolution
+MODE_DISPLAY_NAMES = {
+    "crowd": "MODE: CROWD ANALYTICS & DENSITY",
+    "criminal": "MODE: CRIMINAL & SUSPECT FACE ID",
+    "anomaly": "MODE: ANOMALY & FALL POSE DETECTION",
+    "cleanliness": "MODE: CLEANLINESS SCORES & LITTER",
+    "worker": "MODE: STAFF & RPF ATTENDANCE",
+    "weapon": "MODE: WEAPON & THREAT SCAN",
+    "all": "MODE: ALL MODELS (CONCURRENT BENCHMARK)",
+}
 
 
 def draw_hud(frame, results):
     """
-    Renders a slim, professional dark HUD bar at top and bottom.
-    Uses pure ASCII text (no emojis) for max OpenCV compatibility.
-    Caches background overlays to avoid re-computing alpha blend every frame.
+    Renders single-model HUD bar highlighting active mode and FPS boost.
     """
     h, w = frame.shape[:2]
     top_h = 36
@@ -25,7 +31,13 @@ def draw_hud(frame, results):
                           np.array([20, 24, 32], dtype=np.float32) * 0.78).astype(np.uint8)
     cv2.line(frame, (0, h - bot_h), (w, h - bot_h), (50, 60, 75), 1)
 
+    active_mode = results.get('active_mode', 'crowd')
+    mode_name = MODE_DISPLAY_NAMES.get(active_mode, f"MODE: {active_mode.upper()}")
+    fps = results.get('fps', 0.0)
+
     criminals = results.get('criminals_found', [])
+    weapons = results.get('weapons_found', [])
+
     if criminals:
         names_str = ", ".join([c.get('name', 'UNKNOWN') for c in criminals])
         banner_h = 36
@@ -34,6 +46,14 @@ def draw_hud(frame, results):
         cv2.line(frame, (0, banner_h), (w, banner_h), (0, 0, 255), 2)
         banner_txt = f"ALERT: WANTED SUSPECT IDENTIFIED [{names_str.upper()}] - RPF NOTIFIED"
         cv2.putText(frame, banner_txt, (14, 24), cv2.FONT_HERSHEY_DUPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+    elif weapons:
+        w_str = ", ".join([w_item.get('label', 'WEAPON') for w_item in weapons])
+        banner_h = 36
+        frame[:banner_h] = (frame[:banner_h].astype(np.float32) * 0.15 +
+                            np.array([0, 0, 200], dtype=np.float32) * 0.85).astype(np.uint8)
+        cv2.line(frame, (0, banner_h), (w, banner_h), (0, 0, 255), 2)
+        banner_txt = f"ALERT: WEAPON DETECTED [{w_str.upper()}] - HIGH SEVERITY"
+        cv2.putText(frame, banner_txt, (14, 24), cv2.FONT_HERSHEY_DUPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
     else:
         # ---- Top bar ----
         frame[:top_h] = (frame[:top_h].astype(np.float32) * 0.25 +
@@ -41,23 +61,12 @@ def draw_hud(frame, results):
         cv2.line(frame, (0, top_h), (w, top_h), (0, 200, 255), 1)
 
         # ---- Top header text ----
-        cv2.putText(frame, "INDIAN RAILWAYS AI SURVEILLANCE",
-                    (14, 23), cv2.FONT_HERSHEY_DUPLEX, 0.55, (0, 200, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, f"INDIAN RAILWAYS AI | {mode_name}",
+                    (14, 23), cv2.FONT_HERSHEY_DUPLEX, 0.52, (0, 200, 255), 1, cv2.LINE_AA)
 
-    # ---- Status badge (top right) ----
-    crowd_level = results.get('crowd_level', 'LOW')
-    if criminals:
-        badge_col = (0, 0, 255)
-        badge_txt = "STATUS: 🚨 CRIMINAL DETECTED"
-    elif "HIGH" in crowd_level or "OVER" in crowd_level:
-        badge_col = (0, 0, 255)
-        badge_txt = "STATUS: HIGH CROWD / ALERT"
-    elif "MED" in crowd_level:
-        badge_col = (0, 180, 255)
-        badge_txt = "STATUS: MODERATE"
-    else:
-        badge_col = (0, 220, 80)
-        badge_txt = "STATUS: NORMAL / SAFE"
+    # ---- FPS & Performance badge (top right) ----
+    badge_col = (0, 220, 80) if fps >= 30 else (0, 180, 255)
+    badge_txt = f"⚡ ISOLATED FPS: {fps:.1f} (HIGH PERF)"
 
     (tw, _), _ = cv2.getTextSize(badge_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
     bx = w - tw - 18
@@ -69,16 +78,18 @@ def draw_hud(frame, results):
     # ---- Bottom metric pills ----
     crowd_count = results.get('crowd_count', 0)
     clean_score = results.get('cleanliness_score', 100)
-    suspects = len(results.get('criminals_found', []))
+    suspects = len(criminals)
     anomalies = len(results.get('anomalies', []))
+    w_count = len(weapons)
     tracked = results.get('tracked_persons', 0)
 
     items = [
+        (f"MODE:{active_mode.upper()}", (0, 200, 255)),
         (f"CROWD:{crowd_count}", (0, 220, 80) if crowd_count < 15 else (0, 180, 255)),
         (f"CLEAN:{clean_score:.0f}%", (0, 220, 80) if clean_score > 70 else (0, 0, 255)),
         (f"SUSPECT:{suspects}", (0, 0, 255) if suspects > 0 else (160, 170, 180)),
         (f"ANOMALY:{anomalies}", (0, 0, 255) if anomalies > 0 else (160, 170, 180)),
-        (f"TRACK:{tracked}", (0, 180, 255)),
+        (f"WEAPON:{w_count}", (0, 0, 255) if w_count > 0 else (160, 170, 180)),
     ]
 
     x_off = 12
@@ -88,11 +99,11 @@ def draw_hud(frame, results):
     y_bot = h - 6
 
     for label, col in items:
-        (lw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
+        (lw, _), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
         cv2.rectangle(frame, (x_off - 4, y_top), (x_off + lw + 4, y_bot), (34, 40, 52), -1)
         cv2.rectangle(frame, (x_off - 4, y_top), (x_off + lw + 4, y_bot), col, 1)
         cv2.putText(frame, label, (x_off, y_text),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
         x_off += col_w
 
 

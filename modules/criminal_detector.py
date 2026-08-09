@@ -48,23 +48,23 @@ class CriminalDetector:
 
       if best_score > self.similarity_threshold:
         current_time = time.time()
+        gender_str = "Male" if face.gender == 1 else "Female"
 
-        # Handle alert cooldown to prevent notification spam
+        # ALWAYS append to matches so pipeline & callers receive suspects on every frame
+        matches.append({
+            "name": best_match,
+            "score": float(best_score),
+            "bbox": bbox,
+            "age": int(face.age),
+            "gender": gender_str,
+        })
+
+        # Handle alert cooldown strictly for system log notifications to prevent spam
         if (
             best_match not in self.alert_cooldown
             or (current_time - self.alert_cooldown[best_match])
             > self.COOLDOWN_SECONDS
         ):
-
-          gender_str = "Male" if face.gender == 1 else "Female"
-          matches.append({
-              "name": best_match,
-              "score": float(best_score),
-              "bbox": bbox,
-              "age": int(face.age),
-              "gender": gender_str,
-          })
-
           self.alert_cooldown[best_match] = current_time
 
           # Push alert to system queue
@@ -76,30 +76,27 @@ class CriminalDetector:
               "location": "Platform Camera 1",
           })
 
-        # Render RED alert box for identified suspect
-        cv2.rectangle(
-            annotated_frame,
-            (bbox[0], bbox[1]),
-            (bbox[2], bbox[3]),
-            (0, 0, 255),
-            3,
-        )
-        label = f"⚠️ SUSPECT: {best_match} ({best_score:.2f})"
-        cv2.putText(
-            annotated_frame,
-            label,
-            (bbox[0], bbox[1] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 0, 255),
-            2,
-        )
+        # Render RED target alert box with corner accents for identified suspect
+        x1, y1, x2, y2 = bbox
+        cv2.rectangle(annotated_frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 180), 1)
+        cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        ln = min(14, max(4, (x2 - x1) // 4))
+        for px, py, dx, dy in [(x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)]:
+          cv2.line(annotated_frame, (px, py), (px + dx * ln, py), (0, 0, 255), 3, cv2.LINE_AA)
+          cv2.line(annotated_frame, (px, py), (px, py + dy * ln), (0, 0, 255), 3, cv2.LINE_AA)
+
+        label = f"⚠️ WANTED: {best_match} ({best_score:.2f})"
+        (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        by = max(y1 - 4, lh + 8)
+        cv2.rectangle(annotated_frame, (x1, by - lh - 6), (x1 + lw + 8, by + 2), (0, 0, 200), -1)
+        cv2.putText(annotated_frame, label, (x1 + 4, by - 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
       else:
         # Render GREEN bounding box for normal passengers
+        x1, y1, x2, y2 = bbox
         cv2.rectangle(
             annotated_frame,
-            (bbox[0], bbox[1]),
-            (bbox[2], bbox[3]),
+            (x1, y1),
+            (x2, y2),
             (0, 255, 0),
             2,
         )
@@ -107,11 +104,12 @@ class CriminalDetector:
         cv2.putText(
             annotated_frame,
             info,
-            (bbox[0], bbox[1] - 10),
+            (x1, max(14, y1 - 6)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
             (0, 255, 0),
             1,
+            cv2.LINE_AA,
         )
 
     return annotated_frame, matches

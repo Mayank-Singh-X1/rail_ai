@@ -1,0 +1,21 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# Gradio & Local Configs
+.gradio/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# System / OS
+.DS_Store
+Thumbs.db

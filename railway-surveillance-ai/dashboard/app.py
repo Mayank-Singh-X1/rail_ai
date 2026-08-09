@@ -35,17 +35,84 @@ def create_dashboard():
     # -------------------------------------------------------------
     # Helper 1: Real-time Live Webcam Stream Processing
     # -------------------------------------------------------------
+    def make_alert_html(criminals, anomalies=None):
+        """Returns a bold flashing HTML alert banner or a green-clear banner."""
+        anomalies = anomalies or []
+        parts = []
+        for m in criminals:
+            parts.append(
+                f"<span style='font-size:1.3em;'>&#128680; SUSPECT DETECTED: "
+                f"<b>{m.get('name','Unknown').upper()}</b> "
+                f"(match score: {m.get('score', 0):.2f})</span>"
+            )
+        for a in anomalies:
+            atype = a.get('type', 'Anomaly')
+            parts.append(f"<span style='font-size:1.1em;'>&#9888; {atype}</span>")
+        
+        if parts:
+            inner = "<br>".join(parts)
+            return f"""
+            <div id='alert-banner' style='
+                background: linear-gradient(135deg, #8B0000, #cc0000);
+                border: 3px solid #ff4444;
+                border-radius: 10px;
+                padding: 16px 22px;
+                margin: 8px 0;
+                color: white;
+                font-family: monospace;
+                animation: pulse-border 0.8s ease-in-out infinite alternate;
+                box-shadow: 0 0 20px rgba(255,60,60,0.7);
+            '>
+            <div style='font-size:1.6em; font-weight:bold; letter-spacing:2px; margin-bottom:8px;'>
+                &#128680;&#128680; SECURITY ALERT &#128680;&#128680;
+            </div>
+            {inner}
+            <div style='font-size:0.8em; margin-top:8px; opacity:0.85;'>
+                Platform Camera 1 &nbsp;|&nbsp; {time.strftime('%H:%M:%S')}
+            </div>
+            </div>
+            <style>
+            @keyframes pulse-border {{
+                from {{ box-shadow: 0 0 12px rgba(255,60,60,0.7); border-color: #ff4444; }}
+                to   {{ box-shadow: 0 0 32px rgba(255,60,60,1.0); border-color: #ff0000; }}
+            }}
+            </style>
+            <script>
+            (function(){{
+                try {{
+                    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    [880, 660, 880].forEach(function(freq, i) {{
+                        var o = ctx.createOscillator();
+                        var g = ctx.createGain();
+                        o.connect(g); g.connect(ctx.destination);
+                        o.frequency.value = freq;
+                        g.gain.setValueAtTime(0.3, ctx.currentTime + i*0.18);
+                        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.18 + 0.15);
+                        o.start(ctx.currentTime + i*0.18);
+                        o.stop(ctx.currentTime + i*0.18 + 0.16);
+                    }});
+                }} catch(e) {{}}
+            }})();
+            </script>
+            """
+        else:
+            return """<div style='
+                background:#0a2a0a; border:2px solid #1a7a1a;
+                border-radius:8px; padding:10px 18px; margin:8px 0;
+                color:#4ade80; font-family:monospace; font-size:1em;
+            '>&#9989; No threats detected &nbsp;|&nbsp; All clear</div>"""
+
     def process_webcam_frame(webcam_frame, enable_crowd=True, enable_criminal=True, enable_anomaly=True, enable_cleanliness=True):
         """Processes real-time webcam frame from browser continuously without freeze."""
         if webcam_frame is None:
-            return None, "⚠️ Please turn on your webcam above (click 'Record' or camera icon)."
+            return None, make_alert_html([]), "Please turn on your webcam above."
         
         # Handle dict format if returned by Gradio
         if isinstance(webcam_frame, dict):
             webcam_frame = webcam_frame.get('image', webcam_frame.get('composite', None))
         
         if webcam_frame is None:
-            return None, "⚠️ Waiting for camera frame..."
+            return None, make_alert_html([]), "Waiting for camera frame..."
             
         try:
             arr = np.array(webcam_frame, dtype=np.uint8)
@@ -61,10 +128,19 @@ def create_dashboard():
                 enable_cleanliness=bool(enable_cleanliness)
             )
             out_rgb = cv2.cvtColor(results['frame'], cv2.COLOR_BGR2RGB)
-            status_str = f"🟢 AI Active | Crowd: {results['crowd_count']} | Clean: {results['cleanliness_score']:.0f}% | Suspects: {len(results['criminals_found'])} | Anomalies: {len(results['anomalies'])} | Time: {time.strftime('%H:%M:%S')}"
-            return out_rgb, status_str
+            suspects = results['criminals_found']
+            anomalies = results['anomalies']
+            alert_html = make_alert_html(suspects, anomalies)
+            crowd_lvl = results.get('crowd_level', 'LOW')
+            status_str = (
+                f"**ALERT: {len(suspects)} SUSPECT(S) DETECTED** | "
+                if suspects else "**All Clear** | "
+            ) + f"Crowd: {results['crowd_count']} ({crowd_lvl}) | "\
+                f"Clean: {results['cleanliness_score']:.0f}% | "\
+                f"Anomalies: {len(anomalies)} | {time.strftime('%H:%M:%S')}"
+            return out_rgb, alert_html, status_str
         except Exception as e:
-            return webcam_frame, f"⚠️ Stream status: {e}"
+            return webcam_frame, make_alert_html([]), f"Stream error: {e}"
 
     # -------------------------------------------------------------
     # Helper 2: Video File Processing
@@ -266,11 +342,16 @@ def create_dashboard():
                         webcam_output = gr.Image(
                             label="🎯 Annotated AI Output with Tracking & Safety HUD"
                         )
+                        alert_banner = gr.HTML(
+                            value="""<div style='background:#0a2a0a;border:2px solid #1a7a1a;
+                            border-radius:8px;padding:10px 18px;color:#4ade80;
+                            font-family:monospace;'>&#9989; System ready — No threats detected</div>"""
+                        )
                         stream_status_text = gr.Markdown("🟢 Ready for live frames.")
                 
                 # Real-time stream event bindings
                 stream_inputs = [webcam_input, live_crowd_chk, live_crim_chk, live_anom_chk, live_clean_chk]
-                stream_outputs = [webcam_output, stream_status_text]
+                stream_outputs = [webcam_output, alert_banner, stream_status_text]
                 
                 # Event 1: When webcam streams
                 webcam_input.stream(

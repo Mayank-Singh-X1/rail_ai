@@ -1,0 +1,10 @@
+{
+  "track_safety_zone": {
+    "polygon": [[100, 400], [500, 400], [500, 600], [100, 600]],
+    "type": "restricted"
+  },
+  "platform_edge_zone": {
+    "polygon": [[50, 200], [600, 200], [600, 300], [50, 300]],
+    "type": "caution"
+  }
+}
